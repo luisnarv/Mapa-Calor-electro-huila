@@ -1,0 +1,7 @@
+# ETL del mapa de calor de ElectroHuila (Python 3.11+)
+pandas>=2.0
+numpy>=1.24
+psycopg2-binary>=2.9
+shapely>=2.0
+python-dotenv>=1.0
+openpyxl>=3.1          # solo lo usa scripts/preparar_geografia.py
