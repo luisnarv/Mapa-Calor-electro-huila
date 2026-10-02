@@ -903,6 +903,54 @@ h2, h3, h4 {
   grid-template-rows: auto 1fr;
 }
 
+/* Leyenda del mapa de calor: una barra de degradado por grupo. */
+.heat-leg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  color: var(--mut);
+  font-size: 10.5px;
+}
+.heat-bar {
+  flex: 0 0 46px;
+  height: 9px;
+  border-radius: 2px;
+  border: 1px solid var(--line);
+}
+.heat-esc {
+  display: flex;
+  justify-content: space-between;
+  margin: 3px 0 0 52px;
+  color: var(--dim);
+  font-size: 9px;
+}
+
+/* Selector de agrupación del mapa (municipio / ciclo). */
+.agr {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.agr-b {
+  flex: 1;
+  background: var(--pan2);
+  border: 1px solid var(--line2);
+  border-radius: var(--r-sm);
+  color: var(--mut);
+  cursor: pointer;
+  font: 600 11px var(--ff);
+  padding: 5px 6px;
+}
+.agr-b:hover {
+  border-color: var(--cu);
+}
+.agr-b.on {
+  background: var(--accent-wash);
+  border-color: var(--cu);
+  color: var(--cu2);
+}
+
 /* Bloque de trazabilidad dentro de la ficha de un registro. */
 .op-trz {
   border-top: 1px solid var(--line2);

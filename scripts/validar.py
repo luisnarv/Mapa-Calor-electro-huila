@@ -86,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # ------------------------------------------------------------------
     print("\nHomologación de códigos")
+    for guia in sorted((RAIZ / "Diccionarios").glob("*.xlsx")):
+        ok("guía presente", guia.name)
     homologacion = RAIZ / "config" / "homologacion_codigos.json"
     if not homologacion.exists():
         mal("tabla de homologación", "falta; corre scripts/preparar_homologacion.py")
@@ -183,6 +185,25 @@ def main(argv: list[str] | None = None) -> int:
            f"{sin_ficha} sin ficha en config/ciclos.json")
     else:
         aviso("ciclo de cada orden", "el payload no trae la dimensión de ciclo")
+
+    # Las dos unidades de agregación del mapa.
+    if geo.get("cc"):
+        if len(geo["cc"]) != len(dim.get("ciclos", [])):
+            mal("centros de ciclo",
+                f"{len(geo['cc'])} centros para {len(dim.get('ciclos', []))} ciclos")
+        else:
+            ok("agrupación por ciclo",
+               f"{len(geo['cc'])} centros de ciclo (el mapa puede agrupar por ciclo)")
+    else:
+        mal("agrupación por ciclo", "el payload no trae geo.cc")
+
+    for campo, rotulo in (("actividades", "actividad"),
+                          ("operaciones", "operación en campo"),
+                          ("brigadas", "brigada")):
+        if dim.get(campo):
+            ok(f"dimensión de {rotulo}", f"{len(dim[campo])} valores: {dim[campo][:4]}")
+        else:
+            aviso(f"dimensión de {rotulo}", "ausente; corre scripts/preparar_homologacion.py")
 
     # Cada punto cuelga de una unidad geográfica real.
     unidades = len(dim["barrios"])

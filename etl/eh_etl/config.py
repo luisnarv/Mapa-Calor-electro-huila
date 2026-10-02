@@ -66,6 +66,7 @@ COLUMNAS = (
     "servicio",
     "fecha_generacion",
     "fecha_accion",
+    "fecha_reconexion",
     "coordenada_x",
     "coordenada_y",
 )

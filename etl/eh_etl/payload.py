@@ -52,6 +52,7 @@ DIMENSIONES: tuple[tuple[str, str], ...] = (
     ("OBSERVACION", "c"), ("SUSPENSION_EN", "s"), ("UBICACION", "u"),
     ("ESTRATO", "f"), ("ESTADO_ORDEN", "x"), ("REGLA", "rg"),
     ("MOTIVO_UBICACION", "mo"), ("CICLO", "ci"),
+    ("OPERACION", "op"), ("BRIGADA", "br"), ("ACTIVIDAD", "ac"),
 )
 
 
@@ -88,6 +89,11 @@ def _pts(df: pd.DataFrame) -> dict[str, list]:
         "mo": df["mo"].tolist(),
         "gr": df["gr"].tolist(),
         "ci": df["ci"].tolist(),
+        "op": df["op"].tolist(),
+        "br": df["br"].tolist(),
+        "ac": df["ac"].tolist(),
+        # Días entre la suspensión y la reconexión; -1 cuando no hubo.
+        "dr": df["DIAS_RECONEXION"].fillna(-1).round().astype(int).tolist(),
         "n": df["DOCUMENTO"].tolist(),
         "nic": df["CUENTA"].tolist(),
     }
@@ -118,7 +124,8 @@ def _preparar(d: pd.DataFrame, capa: CapaMunicipios, anios: tuple[int, ...] | No
 
     for col in ("FUNCIONARIO", "CAUSAL", "CLASE_SERVICIO", "OBSERVACION",
                 "SUSPENSION_EN", "UBICACION", "ESTRATO", "ESTADO_ORDEN",
-                "REGLA", "MOTIVO_UBICACION", "RESULTADO", "GRUPO", "CICLO"):
+                "REGLA", "MOTIVO_UBICACION", "RESULTADO", "GRUPO", "CICLO",
+                "OPERACION", "BRIGADA", "ACTIVIDAD"):
         d[col] = d[col].fillna("SIN DATO")
     return d
 
@@ -150,6 +157,10 @@ def build_and_write(d: pd.DataFrame, capa: CapaMunicipios, informe: dict,
         cabeza = rotulo.split(" · ")[0]
         return float(cabeza) if cabeza.isdigit() else float("inf")
 
+    operaciones, opi = _indice(d["OPERACION"])
+    brigadas, bri = _indice(d["BRIGADA"])
+    actividades, aci = _indice(d["ACTIVIDAD"])
+
     ciclos_rotulo = sorted(d["CICLO"].unique(), key=_num_ciclo)
     cii = {c: i for i, c in enumerate(ciclos_rotulo)}
     fichas = ciclos or {}
@@ -168,6 +179,7 @@ def build_and_write(d: pd.DataFrame, capa: CapaMunicipios, informe: dict,
         "BKEY": ui, "FUNCIONARIO": ti, "CAUSAL": gi, "CLASE_SERVICIO": oi,
         "OBSERVACION": ci, "SUSPENSION_EN": si, "UBICACION": uui, "ESTRATO": fi,
         "ESTADO_ORDEN": xi, "REGLA": ri, "MOTIVO_UBICACION": moi, "CICLO": cii,
+        "OPERACION": opi, "BRIGADA": bri, "ACTIVIDAD": aci,
     }
     for col, letra in DIMENSIONES:
         d[letra] = d[col].map(mapas[col]).fillna(0).astype(int)
@@ -198,6 +210,22 @@ def build_and_write(d: pd.DataFrame, capa: CapaMunicipios, informe: dict,
                        round(float(grp["LONGITUD"].median()), 5)])
         else:
             bc.append([capa.puntos[cap_i][0], capa.puntos[cap_i][1]])
+
+    # --- Centro de cada ciclo ---------------------------------------------
+    # El ciclo no tiene geometría propia —puede abarcar varios municipios— pero
+    # el mapa debe poder agrupar por él. Su centro es la mediana de sus GPS
+    # reales, que es donde de verdad opera; si no tiene suficientes, el promedio
+    # de lo que haya (que serán centroides municipales).
+    cc: list[list[float]] = []
+    for i in range(len(ciclos_rotulo)):
+        grp = d[d["ci"] == i]
+        reales = grp[grp["ap"] == 0]
+        base = reales if len(reales) >= 5 else grp
+        if len(base):
+            cc.append([round(float(base["LATITUD"].median()), 5),
+                       round(float(base["LONGITUD"].median()), 5)])
+        else:
+            cc.append([LAT0, LON0])
 
     # --- Geografía: polígonos de las unidades que sí tienen registros ------
     usadas = {unidad_a_capa[i]: i for i in range(len(unidades))}
@@ -275,6 +303,10 @@ def build_and_write(d: pd.DataFrame, capa: CapaMunicipios, informe: dict,
             "cicloUsuarios": [f.get("usuarios", 0) for f in ciclo_ficha],
             "cicloZona": [f.get("zona", "") for f in ciclo_ficha],
             "cicloUbicacion": [f.get("ubicacion", "") for f in ciclo_ficha],
+            # --- De la guía de observaciones -------------------------------
+            "operaciones": operaciones,
+            "brigadas": brigadas,
+            "actividades": actividades,
             "b_muni": b_muni,
             "b_zona": b_zona,
             # Rótulos de los filtros: el visor no tiene que saber qué columna
@@ -289,13 +321,16 @@ def build_and_write(d: pd.DataFrame, capa: CapaMunicipios, informe: dict,
                 "subs": "Suspensión en",
                 "resultado": "Resultado",
                 "ciclos": "Ciclo de suspensión",
+                "actividades": "Actividad",
+                "operaciones": "Operación en campo",
+                "brigadas": "Brigada",
                 "susps": "Ubicación",
                 "tarifas": "Estrato",
                 "orden": "Documento",
                 "nic": "Cuenta",
             },
         },
-        "geo": {"bc": bc, "bp": bpoly, "mp": mpoly, "zp": zpoly},
+        "geo": {"bc": bc, "bp": bpoly, "mp": mpoly, "zp": zpoly, "cc": cc},
         "pts": _pts(reciente),
     }
 

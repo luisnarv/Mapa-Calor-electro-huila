@@ -131,6 +131,49 @@ def enrich(df: pd.DataFrame, clasificador: Clasificador,
     log.info("Ciclo: %s con ficha, %s sin ella (de %s).",
              f"{int(con_ficha.sum()):,}", f"{int((~con_ficha).sum()):,}", f"{len(d):,}")
 
+    # --- Actividad: suspensión o reconexión -------------------------------
+    #
+    # `historico_electrohuila` es el plano de control de SUSPENSIONES: las
+    # 422.727 filas nacen como orden de suspensión (todas traen causal y fecha
+    # de generación). La reconexión no es otro tipo de orden, es el evento
+    # posterior sobre la misma orden, y queda registrado en `fecha_reconexion`.
+    #
+    # La señal es inequívoca: `estado = 'R'` y `fecha_reconexion` no nula
+    # coinciden en el 100 % de las 82.879 filas reconectadas, y solo 68 de las
+    # 267.546 suspendidas tienen fecha sin estar en 'R'. Se usa la fecha, que
+    # es el hecho, y se refuerza con los códigos de observación que la guía
+    # marca como de reconexión (son pocos, pero confirman la visita).
+    rec = pd.to_datetime(d["fecha_reconexion"], errors="coerce")
+    cod_reconexion = _por_unico(
+        d["_observacion_suspension"],
+        lambda c: clasificador.atributo("observacion_suspension", c, "operacion") == "Reconexión",
+    )
+    d["RECONECTADA"] = rec.notna() | cod_reconexion
+    d["ACTIVIDAD"] = d["RECONECTADA"].map({True: "Reconexión", False: "Suspensión"})
+    d["FECHA_RECONEXION"] = rec
+
+    # Cuánto pasó entre la suspensión y la reconexión. Solo informativo, para
+    # la ficha del registro; los negativos se descartan porque son datos
+    # inconsistentes, no reconexiones anticipadas.
+    dias = (rec - pd.to_datetime(d["fecha_accion"], errors="coerce")).dt.total_seconds() / 86400
+    d["DIAS_RECONEXION"] = dias.where(dias >= 0).round(1)
+
+    log.info("Actividad: %s", d["ACTIVIDAD"].value_counts().to_dict())
+
+    # De la guía de observaciones: a qué operación pertenece el código de la
+    # visita y con qué brigada se ejecuta. No intervienen en la clasificación;
+    # son dos dimensiones más para filtrar y leer el mapa.
+    d["OPERACION"] = _por_unico(
+        d["_observacion_suspension"],
+        lambda c: clasificador.atributo("observacion_suspension", c, "operacion",
+                                        "SIN DEFINIR"))
+    d["BRIGADA"] = _por_unico(
+        d["_observacion_suspension"],
+        lambda c: clasificador.atributo("observacion_suspension", c, "brigada",
+                                        "SIN DATO"))
+    log.info("Operación de la orden: %s",
+             d["OPERACION"].value_counts().to_dict())
+
     d["CLASE_SERVICIO"] = _por_unico(d["clase_servicio"],
                                      lambda v: etiqueta(ETIQUETAS_CLASE_SERVICIO, v))
     d["UBICACION"] = _por_unico(d["ubicacion"], lambda v: etiqueta(ETIQUETAS_UBICACION, v))

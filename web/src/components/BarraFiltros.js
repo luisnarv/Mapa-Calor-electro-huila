@@ -131,12 +131,21 @@ export default function BarraFiltros({
       .map((texto, i) => ({ valor: i, texto }))
       .filter((o) => disponibles.has(o.valor));
 
-  const unidadSel =
-    st.selUnidad != null ? (dim.barrios[st.selUnidad] || "").split(" | ").pop() : null;
+  // El rótulo de la unidad seleccionada depende de por qué esté agrupado el
+  // mapa: "Palermo" si es por municipio, "Ciclo 80" si es por ciclo.
+  const porCiclo = st.agrupar === "ciclo";
+  const unidadSel = st.selUnidad == null
+    ? null
+    : porCiclo
+      ? `Ciclo ${(dim.ciclos?.[st.selUnidad] || "").split(" · ")[0]}`
+      : (dim.barrios[st.selUnidad] || "").split(" | ").pop();
+  const etiquetaUnidad = porCiclo
+    ? (et.ciclos || "Ciclo")
+    : (et.unidad || "Municipio");
 
   const hayFiltros =
     st.zona !== "" || st.muni !== "" || st.brig !== "" || st.tipo !== "" ||
-    st.ciclo !== "" || mesesPuestos || unidadSel;
+    st.ciclo !== "" || st.oper !== "" || st.activ !== "" || mesesPuestos || unidadSel;
 
   const edad = edadDeLosDatos(st.generated);
   const estadoRefresco =
@@ -178,6 +187,20 @@ export default function BarraFiltros({
             opciones={opcionesDe(dim.brigs, avail.brig)}
             onElegir={(v) => onFilterChange("brig", v)}
             vacio={`Todos los causales (${avail.brig.size})`}
+          />
+          <FiltroPildora
+            etiqueta={et.actividades || "Actividad"}
+            valor={st.activ}
+            opciones={opcionesDe(dim.actividades || [], avail.activ)}
+            onElegir={(v) => onFilterChange("activ", v)}
+            vacio={`Suspensión y reconexión (${avail.activ.size})`}
+          />
+          <FiltroPildora
+            etiqueta={et.operaciones || "Operación"}
+            valor={st.oper}
+            opciones={opcionesDe(dim.operaciones || [], avail.oper)}
+            onElegir={(v) => onFilterChange("oper", v)}
+            vacio={`Todas las operaciones (${avail.oper.size})`}
           />
           <FiltroPildora
             etiqueta={et.ciclos || "Ciclo"}
@@ -251,7 +274,7 @@ export default function BarraFiltros({
                 onClick={() => onFilterChange("selUnidad", null)}
                 aria-label={`Quitar el filtro de ${unidadSel}`}
               >
-                <span className="hd-pill-k">{et.unidad || "Municipio"}</span>
+                <span className="hd-pill-k">{etiquetaUnidad}</span>
                 <span className="hd-pill-v">: {unidadSel}</span>
                 <span className="hd-pill-ic" aria-hidden="true">
                   <X size={13} strokeWidth={2.4} />

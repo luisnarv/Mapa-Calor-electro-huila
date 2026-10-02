@@ -1,11 +1,20 @@
-"""Convierte `Diccionario_codigos_electrohuila.xlsx` en la tabla de homologación.
+"""Convierte las guías de `Diccionarios/` en la tabla de homologación.
 
 Paso de UNA sola vez, como `preparar_geografia.py`: su salida
 (`config/homologacion_codigos.json`) queda dentro del proyecto y el ETL ya no
-necesita el Excel ni openpyxl en tiempo de ejecución. Se vuelve a correr solo si
-ElectroHuila actualiza el diccionario.
+necesita los Excel ni openpyxl en tiempo de ejecución. Se vuelve a correr solo
+si ElectroHuila actualiza las guías.
 
-El Excel trae dos hojas y las dos se usan:
+Son dos archivos y se complementan:
+
+* **`Diccionario_codigos_electrohuila.xlsx`** — dice **qué resultado** asigna
+  cada código. Es la fuente de la clasificación.
+* **`observaciones*.xlsx`** — dice **qué es** cada código: a qué operación
+  pertenece (suspensión o reconexión), con qué brigada se ejecuta, si se usa en
+  cartera y el contexto operativo de campo. No cambia ningún resultado; agrega
+  las descripciones y dos dimensiones nuevas al mapa.
+
+El primero trae dos hojas y las dos se usan:
 
 * **`Códigos`** — un código por fila, con la columna a la que pertenece, su
   significado oficial, el resultado que asigna y si decide por sí solo. De aquí
@@ -20,6 +29,7 @@ regla general en `eh_etl/clasificacion.py`.
 """
 from __future__ import annotations
 
+import collections
 import json
 import os
 import sys
@@ -29,7 +39,18 @@ import openpyxl
 
 RAIZ = Path(__file__).resolve().parents[1]
 SALIDA = RAIZ / "config" / "homologacion_codigos.json"
-DICCIONARIO_POR_DEFECTO = RAIZ / "Diccionario_codigos_electrohuila.xlsx"
+DICCIONARIOS = RAIZ / "Diccionarios"
+DICCIONARIO_POR_DEFECTO = DICCIONARIOS / "Diccionario_codigos_electrohuila.xlsx"
+
+# `SE USA EN` de la guía de observaciones -> a qué operación pertenece el código.
+# Solo se traduce lo que el texto dice sin ambigüedad; el resto queda vacío.
+OPERACION_POR_USO = {
+    "SUSPENSIONES": "Suspensión",
+    "RECONEXIONES": "Reconexión",
+    "EN 2, SUS Y RECO": "Suspensión y reconexión",
+    "NO SE USA": "No se usa",
+    "SE USA LA AV, ESTA NO": "No se usa",
+}
 
 # Nombre de la hoja -> cómo lo llama el ETL.
 COLUMNA_A_CAMPO = {
@@ -105,6 +126,42 @@ def main(argv: list[str] | None = None) -> int:
     for campo, tabla in campos.items():
         solos = sum(1 for v in tabla.values() if v["decide_solo"])
         print(f"  {campo:24} {len(tabla):3} códigos · {solos} deciden por sí solos")
+
+    # ---- Guía de observaciones: qué ES cada código ------------------------
+    guias = sorted(DICCIONARIOS.glob("observaciones*.xlsx"))
+    enriquecidos = 0
+    for guia in guias:
+        wb2 = openpyxl.load_workbook(guia, read_only=True, data_only=True)
+        hoja2 = wb2[wb2.sheetnames[0]]
+        filas2 = list(hoja2.iter_rows(values_only=True))
+        cab2 = [texto(c) for c in filas2[0]]
+        for fila in filas2[1:]:
+            if not fila or not any(fila):
+                continue
+            d = dict(zip(cab2, fila))
+            cod = codigo(d.get("OBS"))
+            if not cod:
+                continue
+            uso = texto(d.get("SE USA EN")).upper()
+            ficha = campos["observacion_suspension"].setdefault(cod, {
+                "significado": texto(d.get("Descripción")),
+                "resultado": None,
+                "decide_solo": False,
+                "actas_diccionario": 0,
+            })
+            if not ficha.get("significado") or ficha["significado"].startswith("("):
+                ficha["significado"] = texto(d.get("Descripción"))
+            ficha["operacion"] = OPERACION_POR_USO.get(uso, "")
+            ficha["brigada"] = texto(d.get("BRIGADA")).upper()
+            ficha["uso_cartera"] = texto(d.get("USO EN CARTERA")).upper().startswith("SI")
+            contexto = texto(d.get("Contexto Operativo y Observación de Campo"))
+            ficha["contexto"] = "" if contexto in ("?", "") else contexto
+            enriquecidos += 1
+        wb2.close()
+        print(f"  {guia.name}: {enriquecidos} códigos con operación y brigada")
+    if not guias:
+        print(f"  AVISO · no hay observaciones*.xlsx en {DICCIONARIOS.name}; "
+              "los códigos quedan sin operación ni brigada.")
 
     # ---- Hoja «Combinaciones»: la tabla exacta ---------------------------
     hoja = wb["Combinaciones"]

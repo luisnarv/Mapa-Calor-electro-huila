@@ -96,6 +96,11 @@ class Clasificador:
         ficha = self.campos.get(campo, {}).get(codigo)
         return ficha["significado"] if ficha else "(no está en el diccionario)"
 
+    def atributo(self, campo: str, codigo: str, nombre: str, vacio: str = "") -> str:
+        """Un atributo de la guía de observaciones (operación, brigada, contexto)."""
+        ficha = self.campos.get(campo, {}).get(codigo) or {}
+        return ficha.get(nombre) or vacio
+
     # -- la resolución -----------------------------------------------------
 
     def resolver(self, causal: str, suspension_en: str, observacion: str,

@@ -59,6 +59,11 @@ export default function Home() {
     brig: "",
     tipo: "",
     ciclo: "",
+    oper: "",
+    activ: "",
+    // Por qué se agrupa el mapa: "municipio" (polígonos oficiales) o "ciclo"
+    // (la sectorización de la operación, sin geometría propia).
+    agrupar: "municipio",
     minOrders: 200,
     hotspot: 60,
     selUnidad: null,
@@ -194,6 +199,10 @@ export default function Home() {
       F: Uint8Array.from(P.f),
       M: Int32Array.from(P.m),
       CI: Int16Array.from(P.ci || new Array(P.e.length).fill(0)),
+      OP: Uint8Array.from(P.op || new Array(P.e.length).fill(0)),
+      AC: Uint8Array.from(P.ac || new Array(P.e.length).fill(0)),
+      DR: Int16Array.from(P.dr || new Array(P.e.length).fill(-1)),
+      BR: Uint8Array.from(P.br || new Array(P.e.length).fill(0)),
       AP: Uint8Array.from(P.ap || new Array(P.e.length).fill(0)),
       // Trazabilidad: grupo operativo, estado crudo, regla y motivo de ubicación.
       GR: Uint8Array.from(P.gr || new Array(P.e.length).fill(0)),
@@ -263,13 +272,15 @@ export default function Home() {
   /* ------------------------------------------------------------------ */
   const IDX = useMemo(() => {
     if (!data || !raw) return new Int32Array(0);
-    const { DAY, B, G, O, CI } = raw;
+    const { DAY, B, G, O, CI, OP, AC } = raw;
     const n = DAY.length;
     const zi = st.zona === "" ? -1 : +st.zona;
     const mi = st.muni === "" ? -1 : +st.muni;
     const gi = st.brig === "" ? -1 : +st.brig;
     const oi = st.tipo === "" ? -1 : +st.tipo;
     const ci = st.ciclo === "" ? -1 : +st.ciclo;
+    const pi = st.oper === "" ? -1 : +st.oper;
+    const ai = st.activ === "" ? -1 : +st.activ;
     const mesesActivos = st.months?.length
       ? new Set(st.months.map((k) => mapaMeses.claveAIdx.get(k)).filter((v) => v !== undefined))
       : null;
@@ -284,26 +295,31 @@ export default function Home() {
       if (gi >= 0 && G[i] !== gi) continue;
       if (oi >= 0 && O[i] !== oi) continue;
       if (ci >= 0 && CI[i] !== ci) continue;
+      if (pi >= 0 && OP[i] !== pi) continue;
+      if (ai >= 0 && AC[i] !== ai) continue;
       out[k++] = i;
     }
     return out.subarray(0, k);
-  }, [data, raw, mapaMeses, st.zona, st.muni, st.brig, st.tipo, st.ciclo, st.months]);
+  }, [data, raw, mapaMeses, st.zona, st.muni, st.brig, st.tipo, st.ciclo,
+      st.oper, st.activ, st.months]);
 
   // Opciones disponibles en cascada: cada filtro se evalúa SIN sí mismo, para
   // que elegir un valor no borre los demás de su propia lista.
   const avail = useMemo(() => {
     const res = {
       zona: new Set(), muni: new Set(), brig: new Set(),
-      tipo: new Set(), ciclo: new Set()
+      tipo: new Set(), ciclo: new Set(), oper: new Set(), activ: new Set()
     };
     if (!data || !raw) return res;
-    const { B, G, O, CI, DAY } = raw;
+    const { B, G, O, CI, OP, AC, DAY } = raw;
     const n = DAY.length;
     const zi = st.zona === "" ? -1 : +st.zona;
     const mi = st.muni === "" ? -1 : +st.muni;
     const gi = st.brig === "" ? -1 : +st.brig;
     const oi = st.tipo === "" ? -1 : +st.tipo;
     const ci = st.ciclo === "" ? -1 : +st.ciclo;
+    const pi = st.oper === "" ? -1 : +st.oper;
+    const ai = st.activ === "" ? -1 : +st.activ;
     const mesesActivos = st.months?.length
       ? new Set(st.months.map((k) => mapaMeses.claveAIdx.get(k)).filter((v) => v !== undefined))
       : null;
@@ -316,19 +332,25 @@ export default function Home() {
       const g = G[i];
       const o = O[i];
       const c = CI[i];
+      const pp = OP[i];
+      const aa = AC[i];
       // Cada filtro se evalúa sin sí mismo, para que elegir un valor no borre
       // los demás de su propia lista.
       const zOk = zi < 0 || z === zi, mOk = mi < 0 || m === mi;
       const gOk = gi < 0 || g === gi, oOk = oi < 0 || o === oi;
-      const cOk = ci < 0 || c === ci;
-      if (mOk && gOk && oOk && cOk) res.zona.add(z);
-      if (zOk && gOk && oOk && cOk) res.muni.add(m);
-      if (zOk && mOk && oOk && cOk) res.brig.add(g);
-      if (zOk && mOk && gOk && cOk) res.tipo.add(o);
-      if (zOk && mOk && gOk && oOk) res.ciclo.add(c);
+      const cOk = ci < 0 || c === ci, pOk = pi < 0 || pp === pi;
+      const aOk = ai < 0 || aa === ai;
+      if (mOk && gOk && oOk && cOk && pOk && aOk) res.zona.add(z);
+      if (zOk && gOk && oOk && cOk && pOk && aOk) res.muni.add(m);
+      if (zOk && mOk && oOk && cOk && pOk && aOk) res.brig.add(g);
+      if (zOk && mOk && gOk && cOk && pOk && aOk) res.tipo.add(o);
+      if (zOk && mOk && gOk && oOk && pOk && aOk) res.ciclo.add(c);
+      if (zOk && mOk && gOk && oOk && cOk && aOk) res.oper.add(pp);
+      if (zOk && mOk && gOk && oOk && cOk && pOk) res.activ.add(aa);
     }
     return res;
-  }, [data, raw, mapaMeses, st.zona, st.muni, st.brig, st.tipo, st.ciclo, st.months]);
+  }, [data, raw, mapaMeses, st.zona, st.muni, st.brig, st.tipo, st.ciclo,
+      st.oper, st.activ, st.months]);
 
   /* ------------------------------------------------------------------ */
   /* 2. Agregación                                                       */
@@ -341,7 +363,10 @@ export default function Home() {
     };
     if (!data || !raw || !IDX.length) return vacio;
 
-    const { GR, B, T, M, DAY } = raw;
+    const { GR, B, CI, T, M, DAY } = raw;
+    // Agrupar por municipio o por ciclo es elegir de qué array sale la clave:
+    // todo lo demás —totales, efectividad, riesgo— es idéntico.
+    const U = st.agrupar === "ciclo" ? CI : B;
     // Qué grupos cuentan como ejecutado y cuáles entran al denominador de la
     // efectividad lo decide el ETL (ver eh_etl/homologacion.py); aquí solo se
     // aplica, para que el mapa y el ETL no puedan discrepar.
@@ -369,7 +394,7 @@ export default function Home() {
     for (let j = 0; j < IDX.length; j++) {
       const i = IDX[j];
       const g = GR[i];
-      const b = B[i];
+      const b = U[i];
       const t = T[i];
       const d = DAY[i];
 
@@ -416,7 +441,7 @@ export default function Home() {
 
     agg.IDX = IDX;
     return agg;
-  }, [IDX, raw, data, st.minOrders]);
+  }, [IDX, raw, data, st.minOrders, st.agrupar]);
 
 
   /* ------------------------------------------------------------------ */
@@ -434,6 +459,7 @@ export default function Home() {
       // Cascada: cambiar zona invalida el municipio elegido dentro de ella.
       if (clave === "zona") { next.muni = ""; next.selUnidad = null; }
       if (clave === "ciclo") { next.selUnidad = null; }
+      if (clave === "agrupar") { next.selUnidad = null; }
       if (clave === "muni") { next.selUnidad = null; }
       return next;
     });
@@ -447,8 +473,8 @@ export default function Home() {
   const onReset = useCallback(() => {
     setSt((prev) => ({
       ...prev,
-      zona: "", muni: "", brig: "", tipo: "", ciclo: "",
-      minOrders: 200, hotspot: 60, selUnidad: null,
+      zona: "", muni: "", brig: "", tipo: "", ciclo: "", oper: "", activ: "",
+      agrupar: "municipio", minOrders: 200, hotspot: 60, selUnidad: null,
       months: (() => {
         const reciente = availableMonths.find((m) => m.recent);
         return reciente ? [reciente.key] : availableMonths.map((m) => m.key);
@@ -520,7 +546,9 @@ export default function Home() {
     B_raw: raw.B, E_raw: raw.E, T_raw: raw.T, G_raw: raw.G, O_raw: raw.O,
     C_raw: raw.C, S_raw: raw.S, U_raw: raw.U, F_raw: raw.F, M_raw: raw.M,
     DAY_raw: raw.DAY, AP_raw: raw.AP, ORD_raw: raw.ORD, NIC_raw: raw.NIC,
-    CI_raw: raw.CI,
+    CI_raw: raw.CI, OP_raw: raw.OP, BR_raw: raw.BR, AC_raw: raw.AC, DR_raw: raw.DR,
+    // El array que define la unidad de agregación activa.
+    U_unidad: st.agrupar === "ciclo" ? raw.CI : raw.B,
     GR_raw: raw.GR, X_raw: raw.X, RG_raw: raw.RG, MO_raw: raw.MO
   };
 
@@ -555,10 +583,11 @@ export default function Home() {
               type="button"
               className="btn-quitar-sel"
               onClick={() => onFilterChange("selUnidad", null)}
-              title="Mostrar todos los municipios"
+              title={st.agrupar === "ciclo"
+                ? "Mostrar todos los ciclos" : "Mostrar todos los municipios"}
             >
               <X size={14} strokeWidth={2.4} aria-hidden="true" />
-              Ver todos los municipios
+              {st.agrupar === "ciclo" ? "Ver todos los ciclos" : "Ver todos los municipios"}
             </button>
           )}
 

@@ -57,15 +57,29 @@ const WORKER_URL = "/maplibre/maplibre-gl-worker.mjs";
  * Punto de saturación del mapa de calor para un conjunto de puntos.
  *
  * `leaflet.heat` necesita saber qué densidad pinta del color más intenso. Con
- * un valor fijo, Neiva satura siempre y el resto del departamento nunca; se
- * calcula sobre los propios puntos, agrupándolos en celdas de ~1 km y tomando
- * el percentil 98 de esa distribución.
+ * un valor fijo, Neiva satura siempre y el resto del departamento nunca, así
+ * que se calcula sobre los propios puntos: se agrupan en celdas del tamaño que
+ * el radio del calor ocupa EN EL TERRENO al zoom actual, y se toma el
+ * percentil 98 de esa distribución.
+ *
+ * Que la celda dependa del zoom es lo que hace que el calor se lea igual de
+ * lejos que de cerca: al acercarse, la misma mancha cubre menos terreno, hay
+ * menos puntos por celda, y el umbral baja con ella. Por eso hay que recalcular
+ * en cada `zoomend`.
  */
-function saturacion(puntos) {
+function saturacion(puntos, map, radio) {
   if (puntos.length < 50) return Math.max(2, puntos.length);
+
+  // Cuántos grados cubre el radio del calor a este zoom.
+  const centro = map.getCenter();
+  const p = map.latLngToContainerPoint(centro);
+  const borde = map.containerPointToLatLng([p.x + radio, p.y + radio]);
+  const dLat = Math.abs(borde.lat - centro.lat) || 1e-4;
+  const dLon = Math.abs(borde.lng - centro.lng) || 1e-4;
+
   const celdas = new Map();
   for (const [la, lo] of puntos) {
-    const k = `${Math.round(la * 100)}:${Math.round(lo * 100)}`;
+    const k = `${Math.round(la / dLat)}:${Math.round(lo / dLon)}`;
     celdas.set(k, (celdas.get(k) || 0) + 1);
   }
   const v = [...celdas.values()].sort((a, b) => a - b);
@@ -122,6 +136,9 @@ export default function MapaCalor({
   // cada redibujado dejaba los anteriores colgados del mapa: al hacer zoom
   // intentaban repintarse sobre un canvas ya retirado y reventaban.
   const lienzo = useRef(null);
+  // Vuelve a calibrar el calor cuando cambia el zoom. Se guarda para poder
+  // soltar el listener antes de volver a dibujar.
+  const recalibrar = useRef(null);
 
   const { theme, palette } = useTheme();
 
@@ -149,9 +166,30 @@ export default function MapaCalor({
   const n0 = (v) => Math.round(v).toLocaleString("es-CO");
   const n1 = (v) => v.toFixed(1).replace(".", ",");
   const colorRiesgo = (r) => riskColor(palette, r);
-  // dim.barrios[i] = "ZONA | MUNICIPIO"
-  const nombreUnidad = (i) => (dim.barrios[i] || "").split(" | ")[1] || "";
-  const nombrePadre = (i) => (dim.barrios[i] || "").split(" | ")[0] || "";
+  // La unidad del mapa puede ser el municipio o el ciclo. Todo lo que la
+  // dibuja pasa por estos cuatro helpers, así que cambiar de agrupación no
+  // toca la lógica de capas.
+  const porCiclo = st.agrupar === "ciclo";
+  // dim.barrios[i] = "ZONA | MUNICIPIO"; dim.ciclos[i] = "80 · CORPORATIVO"
+  const nombreUnidad = (i) => porCiclo
+    ? `Ciclo ${(dim.ciclos?.[i] || "").split(" · ")[0]}`
+    : (dim.barrios[i] || "").split(" | ")[1] || "";
+  const nombrePadre = (i) => porCiclo
+    ? (dim.ciclos?.[i] || "").split(" · ")[1] || "sin descripción"
+    : (dim.barrios[i] || "").split(" | ")[0] || "";
+  const centroUnidad = (i) => (porCiclo ? geo.cc : geo.bc)?.[i];
+
+  /** "Reconexión (a los 3 días)" — los días solo aparecen si los hay. */
+  const actividadTexto = (i) => {
+    const s = stVivo.current;
+    const nombre = dim.actividades?.[s.AC_raw[i]] ?? "—";
+    const dias = s.DR_raw?.[i];
+    if (dias == null || dias < 0) return nombre;
+    const cuando = dias === 0 ? "el mismo día"
+      : dias === 1 ? "al día siguiente"
+      : `a los ${n0(dias)} días`;
+    return `${nombre} (${cuando})`;
+  };
 
   /** "80 · CORPORATIVO-NEIVA (Zona Norte · 716 usuarios)" */
   const cicloTexto = (i) => {
@@ -191,6 +229,9 @@ export default function MapaCalor({
             <tr><td>${etiquetas.tarifas || "Estrato"}</td><td>${dim.tarifas[s.F_raw[i]]}</td></tr>
             <tr><td>${etiquetas.susps || "Ubicación"}</td><td>${dim.susps[s.U_raw[i]]}</td></tr>
             <tr><td>${etiquetas.ciclos || "Ciclo"}</td><td>${cicloTexto(s.CI_raw[i])}</td></tr>
+            <tr><td>${etiquetas.actividades || "Actividad"}</td><td>${actividadTexto(i)}</td></tr>
+            <tr><td>${etiquetas.operaciones || "Operación"}</td><td>${dim.operaciones?.[s.OP_raw[i]] ?? "—"}</td></tr>
+            <tr><td>${etiquetas.brigadas || "Brigada"}</td><td>${dim.brigadas?.[s.BR_raw[i]] ?? "—"}</td></tr>
           </tbody>
         </table>
 
@@ -209,7 +250,7 @@ export default function MapaCalor({
         </div>
 
         <div style="display:flex;flex-direction:column;gap:5px;margin-top:6px;">
-          <button class="op-b" data-b="${s.B_raw[i]}">Ver solo ${nombreUnidad(s.B_raw[i])}</button>
+          <button class="op-b" data-b="${s.U_unidad[i]}">Ver solo ${nombreUnidad(s.U_unidad[i])}</button>
         </div>
       `)
       .openOn(map);
@@ -442,6 +483,10 @@ export default function MapaCalor({
       if (capaPuntos.current && map.hasLayer(capaPuntos.current)) {
         map.removeLayer(capaPuntos.current);
       }
+      if (recalibrar.current) {
+        map.off("zoomend", recalibrar.current);
+        recalibrar.current = null;
+      }
       if (lienzo.current && map.hasLayer(lienzo.current)) map.removeLayer(lienzo.current);
       map.remove();
 
@@ -465,6 +510,10 @@ export default function MapaCalor({
     const tam = map.getSize();
     if (!tam.x || !tam.y) return;
 
+    if (recalibrar.current) {
+      map.off("zoomend", recalibrar.current);
+      recalibrar.current = null;
+    }
     capaVectores.current.clearLayers();
     capaMarcadores.current.clearLayers();
     Object.values(capasCalor.current).forEach((c) => { if (c) map.removeLayer(c); });
@@ -507,8 +556,10 @@ export default function MapaCalor({
     }
 
     // --- Municipios: el polígono de la unidad, coloreado por riesgo ----
-    if ((st.layers.bpoly || st.selUnidad != null) && geo.bp) {
-      const sel = st.selUnidad;
+    if ((st.layers.bpoly || (st.selUnidad != null && !porCiclo)) && geo.bp) {
+      // Al agrupar por ciclo, el polígono municipal pierde su agregado: se
+      // dibuja como límite, sin color de riesgo ni selección.
+      const sel = porCiclo ? null : st.selUnidad;
       for (const poli of geo.bp) {
         if (sel != null) {
           if (poli.b !== sel) continue;
@@ -566,9 +617,9 @@ export default function MapaCalor({
       const e = st.E_raw[i];
       if (!est[e]) continue;
       const g = st.GR_raw[i];
-      const u = st.B_raw[i];
+      const u = st.U_unidad[i];
       visiblesPorUnidad.set(u, (visiblesPorUnidad.get(u) || 0) + 1);
-      if (st.selUnidad != null && st.B_raw[i] !== st.selUnidad) continue;
+      if (st.selUnidad != null && st.U_unidad[i] !== st.selUnidad) continue;
       const aprox = st.AP_raw[i] === 1;
       if (aprox ? !st.layers.approx : !st.layers.gps) continue;
 
@@ -587,15 +638,33 @@ export default function MapaCalor({
       const difuso = st.selUnidad != null ? 15 : 20;
       for (let g = 0; g < calor.length; g++) {
         if (!calor[g].length) continue;
-        // El punto de saturación se calcula sobre los propios datos: un tope
-        // fijo satura de más en Neiva y de menos en el resto. Se usa el
-        // percentil 98 de los puntos del grupo agrupados por celda.
         capasCalor.current[g] = L.heatLayer(calor[g], {
-          radius: radio, blur: difuso, max: saturacion(calor[g]),
-          minOpacity: 0.42, maxZoom: 13,
+          radius: radio, blur: difuso,
+          max: saturacion(calor[g], map, radio),
+          minOpacity: 0.42,
+          // `maxZoom` en leaflet.heat NO es el zoom máximo: es el zoom a partir
+          // del cual cada punto pesa 1. Por debajo, el peso se divide entre
+          // 2^(maxZoom - zoom), así que un valor fijo dejaba el calor casi
+          // invisible a escala departamental. Fijarlo al zoom actual lo deja
+          // siempre en 1 y la intensidad la gobierna solo `max`.
+          maxZoom: map.getZoom(),
           gradient: P.heat[g] || P.heat[P.heat.length - 1], pane: "heat"
         }).addTo(map);
       }
+
+      // Al cambiar el zoom, la celda de referencia cambia de tamaño en el
+      // terreno: se recalculan umbral y peso para que el color siga
+      // significando lo mismo.
+      recalibrar.current = () => {
+        const z = map.getZoom();
+        const r = stVivo.current.selUnidad != null ? 25 : 14;
+        for (let g = 0; g < calor.length; g++) {
+          const capa = capasCalor.current[g];
+          if (!capa || !calor[g].length) continue;
+          capa.setOptions({ max: saturacion(calor[g], map, r), maxZoom: z });
+        }
+      };
+      map.on("zoomend", recalibrar.current);
     }
 
     if (st.layers.puntos && sueltos.length) {
@@ -615,7 +684,7 @@ export default function MapaCalor({
       for (const v of visiblesPorUnidad.values()) if (v > mayor) mayor = v;
       for (const [b, o] of A.barrio) {
         if (sel != null && b !== sel) continue;
-        const centro = geo.bc[b];
+        const centro = centroUnidad(b);
         if (!centro) continue;
         const visibles = visiblesPorUnidad.get(b) || 0;
         if (!visibles) continue;
@@ -624,12 +693,18 @@ export default function MapaCalor({
         const foco = o.risk != null && o.risk >= st.hotspot;
         const radio = 5 + 15 * Math.sqrt(visibles / mayor);
         const color = colorRiesgo(o.risk);
+        // Agrupando por ciclo se puede expresar la carga como tasa: el Excel
+        // de ciclos trae cuántos usuarios tiene cada uno.
+        const usuarios = porCiclo ? (dim.cicloUsuarios?.[b] || 0) : 0;
+        const tasa = usuarios
+          ? `<span class="tt-p">${n1(o.tot / usuarios * 1000)} por cada 1.000 usuarios del ciclo (${n0(usuarios)})</span>`
+          : "";
         const texto =
-          `<b>${nombreUnidad(b)}</b><span class="tt-m">Zona ${nombrePadre(b)}</span>
+          `<b>${nombreUnidad(b)}</b><span class="tt-m">${porCiclo ? "" : "Zona "}${nombrePadre(b)}</span>
            <span class="tt-r" style="color:${riskColor(P, o.risk, true)}">Riesgo ${o.risk ?? "—"}</span>
            <span>${n0(o.tot)} registros · ${n1(o.efPct)}% ejecutadas</span>
            <span>${n0(o.ef)} ejecutadas · ${n0(o.fa)} no fue posible</span>
-           <span class="tt-p">${n0(o.pe)} fuera del alcance (no procedía o sin información)</span>` +
+           <span class="tt-p">${n0(o.pe)} fuera del alcance (no procedía o sin información)</span>` + tasa +
           (visibles !== o.tot
             ? `<span class="tt-p">mostrando ${n0(visibles)} de ${n0(o.tot)} en el filtro actual</span>`
             : "");
@@ -663,7 +738,8 @@ export default function MapaCalor({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [generacion, A, st.layers, st.est, st.hotspot, st.selUnidad, st.zona, st.muni, theme]);
+  }, [generacion, A, st.layers, st.est, st.hotspot, st.selUnidad, st.zona,
+      st.muni, st.agrupar, theme]);
 
   /* ------------------------------------------------------------------ */
   /* 3. Cambio de tema: se cambia el estilo del basemap y se repinta     */
@@ -680,10 +756,10 @@ export default function MapaCalor({
   useEffect(() => {
     const map = mapa.current;
     if (!map || st.selUnidad == null) return;
-    const centro = geo.bc[st.selUnidad];
+    const centro = (st.agrupar === "ciclo" ? geo.cc : geo.bc)?.[st.selUnidad];
     if (centro) map.flyTo(centro, 11, { duration: 0.6 });  // marca el mapa como tocado
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [st.selUnidad]);
+  }, [st.selUnidad, st.agrupar]);
 
   const vacio = !(st.est || []).some(Boolean);
 

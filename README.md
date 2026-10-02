@@ -30,7 +30,9 @@ ElectroHuila_Mapa_Nuevo/
 │   ├── preparar_homologacion.py paso único: diccionario .xlsx -> config/
 │   ├── preparar_ciclos.py       paso único: Excel de ciclos -> config/
 │   └── validar.py               comprobación de punta a punta
-├── Diccionario_codigos_electrohuila.xlsx   insumo oficial de la clasificación
+├── Diccionarios/                insumos oficiales de la clasificación
+│   ├── Diccionario_codigos_electrohuila.xlsx   qué resultado asigna cada código
+│   └── observaciones (2).xlsx                  qué ES cada código
 ├── web/                      Next.js · el visor
 │   ├── src/app/              layout, página y hoja de estilo
 │   ├── src/components/       MapaCalor, PanelCapas, BarraFiltros, FiltroPildora
@@ -118,6 +120,7 @@ Columnas que consume el mapa y en qué se convierten:
 | `causal_suspension` | clasificación + filtro | Causal de suspensión |
 | `suspension_en` | clasificación + detalle | Suspensión en |
 | `ciclo` | filtro + detalle | Ciclo de suspensión |
+| `fecha_reconexion` | filtro + detalle | Actividad (suspensión / reconexión) |
 | `clase_servicio` | filtro | Clase de servicio |
 | `ubicacion` | detalle | Urbano / Rural |
 | `estrato` | detalle | Estrato |
@@ -133,14 +136,23 @@ corrige.
 
 ### Cómo se clasifica el resultado de cada orden
 
-La clasificación sale **exclusivamente** de
-`Diccionario_codigos_electrohuila.xlsx`.
-`scripts/preparar_homologacion.py` lo convierte en
+La clasificación sale **exclusivamente** de las guías de `Diccionarios/`.
+`scripts/preparar_homologacion.py` las convierte en
 `config/homologacion_codigos.json` y `eh_etl/clasificacion.py` lo aplica. No hay
-ninguna equivalencia inventada ni coincidencia aproximada de texto: lo que el
-diccionario no cubre queda marcado como `SIN CLASIFICAR`, con el motivo.
+ninguna equivalencia inventada ni coincidencia aproximada de texto: lo que las
+guías no cubren queda marcado como `SIN CLASIFICAR`, con el motivo.
 
-El diccionario trae dos hojas y se usan las dos:
+Son dos archivos y se complementan:
+
+* **`Diccionario_codigos_electrohuila.xlsx`** dice **qué resultado** asigna cada
+  código. Es la fuente de la clasificación.
+* **`observaciones (2).xlsx`** dice **qué es** cada código: a qué operación
+  pertenece (suspensión o reconexión), con qué brigada se ejecuta, si se usa en
+  cartera y el contexto operativo de campo. No cambia ningún resultado; aporta
+  las descripciones que faltaban y dos dimensiones nuevas al mapa —
+  **Operación** y **Brigada**.
+
+El primero trae dos hojas y se usan las dos:
 
 * **`Códigos`** — 68 códigos repartidos en cuatro columnas
   (`observacion_suspension`, `causal_suspension`, `suspension_en`, `estado`),
@@ -203,9 +215,10 @@ Los catorce códigos de observación con más actas (la tabla completa está en
 | ACTA DE RECONEXIÓN | 2.628 | 0,6 % | No procedía suspender |
 | SIN CLASIFICAR | 97 | 0,02 % | Sin información |
 
-Los 97 sin clasificar llevan su motivo: casi todos son la causal `SV` y el
-código de observación `AD`, que **no están en el diccionario**. Son los dos
-primeros códigos que conviene pedirle a ElectroHuila.
+Los 97 sin clasificar llevan su motivo. La segunda guía resolvió uno de los dos
+códigos que faltaban —`AD` = ACTUALIZAR DATOS, marcado como «no se usa en
+cartera»—, así que lo único que sigue sin ficha es la **causal `SV`**
+(35.333 filas). La regla general la resuelve bien, pero conviene incorporarla.
 
 #### Lo único que decide el proyecto y no el diccionario
 
@@ -297,6 +310,57 @@ de capas:
 | `municipio_ambiguo` | el nombre apunta a más de una ubicación | 0 |
 | `sin_clave` | la orden no trae ningún nivel administrativo | 0 |
 
+### Actividad: suspensión o reconexión
+
+`historico_electrohuila` es el plano de control de **suspensiones**: las 422.727
+filas nacen como orden de suspensión —todas traen `causal_suspension` y
+`fecha_generacion`—. La reconexión no es otro tipo de orden en esta tabla: es el
+evento posterior sobre la misma orden.
+
+La señal es inequívoca y por eso el filtro se apoya en ella:
+
+| | Filas | Con `fecha_reconexion` |
+|---|---:|---:|
+| `estado = 'R'` (reconectado) | 82.879 | **82.879 (100 %)** |
+| `estado = 'S'` (suspendido) | 267.546 | 68 (0,03 %) |
+| `estado = 'N'` / `'A'` | 72.302 | 0 |
+
+De ahí sale la dimensión **Actividad**, con dos valores:
+
+- **Suspensión** — 339.681 órdenes sin reconexión registrada.
+- **Reconexión** — 83.046 órdenes que sí la registraron (`fecha_reconexion`, o
+  un código de observación que la guía marca como de reconexión: son solo 131
+  filas, pero confirman la visita).
+
+La ficha del registro muestra además cuánto tardó: «Reconexión (el mismo día)»,
+«(al día siguiente)», «(a los 12 días)». Los pocos casos con fecha de reconexión
+anterior a la de acción (92 filas) se descartan como dato inconsistente, no se
+muestran como reconexión anticipada.
+
+**No confundir con «Operación en campo»**, que es otro filtro y otra cosa: ese
+sale del código de observación y dice qué hizo la cuadrilla en la visita según
+la guía de observaciones. Hoy el 78 % de los registros cae en «sin definir»
+porque los códigos dominantes (`NI`, `UC`, `AA`) no declaran operación, así que
+para dividir el trabajo por actividad sirve **Actividad**, no aquel.
+
+### Ver el mapa por ciclos
+
+El panel de capas tiene un selector **«Agrupar el mapa por»** con dos opciones:
+
+| | Unidad | Centro del marcador | Polígono |
+|---|---|---|---|
+| **Municipio** | 41 municipios con registros | punto representativo del polígono, o la mediana de sus GPS reales si tiene ≥ 5 | sí, coloreado por riesgo |
+| **Ciclo** | 96 ciclos | mediana de los GPS reales del ciclo | no: un ciclo puede abarcar varios municipios |
+
+Los marcadores, la efectividad y el índice de riesgo se recalculan sobre la
+unidad elegida — es literalmente de qué array sale la clave de agregación, así
+que las dos vistas usan el mismo motor. Al agrupar por ciclo, el polígono
+municipal se sigue pudiendo dibujar, pero como límite sin color: su agregado ya
+no corresponde a la unidad activa.
+
+Seleccionar un ciclo (clic en su marcador, o la píldora «Ciclo de suspensión»)
+deja en el mapa solo sus registros y vuela a su centro.
+
 ### El ciclo de suspensión
 
 `ciclo` viene poblado al 100 % (96 valores distintos, rango 1–200) y es la única
@@ -383,9 +447,8 @@ Lo mismo que el visor de referencia, con la fuente cambiada.
   *qué* se concentra, no solo *cuánto*. El filtro es por resultado (los siete
   del diccionario) pero el color va por grupo, para no superponer siete rampas.
   La suspensión ejecutada pesa menos (0,6) porque es el grupo más numeroso y si
-  no tapa a las que no se pudieron ejecutar. El punto de saturación de cada
-  rampa se calcula sobre los propios puntos (percentil 98 por celda de ~1 km),
-  no con un tope fijo que satura en Neiva y nunca en el resto.
+  no tapa a las que no se pudieron ejecutar. Tiene **leyenda propia** en el
+  panel, con la rampa de cada grupo.
 - **Marcadores por municipio**: tamaño por volumen —relativo al municipio más
   cargado del filtro—, color por índice de riesgo, y un aro que late en los que
   pasan el umbral de foco.
@@ -400,8 +463,8 @@ Lo mismo que el visor de referencia, con la fuente cambiada.
 - **Ficha de registro con trazabilidad**: al hacer clic en un punto se ve el
   resultado y, debajo, los cuatro códigos originales con su significado
   oficial, la regla que decidió y el motivo de la ubicación.
-- **Filtros en cascada** (zona, municipio, causal, ciclo, clase de servicio,
-  meses):
+- **Filtros en cascada** (zona, municipio, causal, actividad, operación en
+  campo, ciclo, clase de servicio, meses):
   cada desplegable solo ofrece lo que el resto de filtros deja con datos.
 - **Selección de meses** multi-selección con descarga perezosa: al abrir solo
   llega el mes en curso; los demás se piden al marcarlos y se guardan en
@@ -411,6 +474,34 @@ Lo mismo que el visor de referencia, con la fuente cambiada.
   tendencia, 10 % historial de los funcionarios que lo atienden. Las
   referencias son el percentil 90 del propio período, no umbrales fijos.
 - **Tema claro / oscuro**, zoom, encuadre automático al área y leyenda.
+
+### Cómo está calibrado el calor
+
+Tres decisiones que vale la pena conocer, porque determinan qué significa un
+color:
+
+1. **La intensidad es relativa a lo que se está viendo.** El punto de saturación
+   de cada rampa es el percentil 98 de la densidad de los registros dibujados,
+   no un tope fijo. Un tope fijo saturaba siempre en Neiva y nunca en el resto.
+2. **La celda de referencia mide lo que el radio del calor ocupa en el
+   terreno**, y por eso se recalcula en cada `zoomend`: al acercarse, la misma
+   mancha cubre menos terreno, hay menos registros por celda y el umbral baja
+   con ella. Sin esto, el calor se leía bien a un solo nivel de zoom.
+3. **`maxZoom` se fija al zoom actual.** En `leaflet.heat` esa opción no es el
+   zoom máximo: es el zoom a partir del cual cada punto pesa 1, y por debajo el
+   peso se divide entre `2^(maxZoom − zoom)`. Con el valor fijo que traía el
+   visor de referencia (13), a escala departamental cada punto pesaba 1/32 y el
+   calor salía casi invisible.
+
+Como el umbral se calcula sobre los puntos dibujados, **cruzar más meses no
+calienta el mapa**: suben a la vez los conteos y el umbral, así que los colores
+siguen siendo comparables. Lo que no es comparable es un mapa contra otro: la
+escala es relativa a cada vista, y la leyenda lo dice.
+
+Al agrupar por ciclo, el tooltip del marcador añade la **tasa por cada 1.000
+usuarios** del ciclo, con el total de usuarios entre paréntesis. Es la única
+forma de comparar un ciclo residencial con uno corporativo: el ciclo 80 tiene
+716 usuarios y más de 15.000 órdenes.
 
 ### Rendimiento
 

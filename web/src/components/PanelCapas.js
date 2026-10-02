@@ -96,6 +96,29 @@ export default function PanelCapas({
 
       {!colapsado && (
         <>
+          <h4>Agrupar el mapa por</h4>
+          <div className="agr">
+            {[
+              ["municipio", dim.etiquetas?.unidad || "Municipio"],
+              ["ciclo", dim.etiquetas?.ciclos || "Ciclo"]
+            ].map(([valor, texto]) => (
+              <button
+                key={valor}
+                type="button"
+                className={`agr-b ${st.agrupar === valor ? "on" : ""}`}
+                onClick={() => onFilterChange("agrupar", valor)}
+              >
+                {texto}
+              </button>
+            ))}
+          </div>
+          <p className="lay-nota">
+            Los marcadores, la efectividad y el índice de riesgo se calculan
+            sobre la unidad elegida. El <b>ciclo</b> no tiene límite dibujable
+            —puede abarcar varios municipios—, así que su marcador se sitúa en
+            la mediana de sus GPS reales.
+          </p>
+
           <h4>Resultado de la orden</h4>
           {porGrupo.map((g) => {
             const todos = g.indices.every((i) => st.est[i]);
@@ -137,7 +160,8 @@ export default function PanelCapas({
           <div className="lgrp">
             <h4>Límites oficiales</h4>
             {casillaCapa("zpoly", "Zonas operativas")}
-            {casillaCapa("bpoly", "Municipios")}
+            {casillaCapa("bpoly", st.agrupar === "ciclo"
+              ? "Municipios (solo límite)" : "Municipios")}
             {casillaCapa("mpoly", "Perímetros urbanos")}
           </div>
 
@@ -172,6 +196,34 @@ export default function PanelCapas({
             </p>
           </div>
 
+          {st.layers.heat && (
+            <div className="lgrp">
+              <h4>Mapa de calor</h4>
+              {dim.grupos.map((_, g) => {
+                const rampa = P.heat?.[g] || P.heat?.[P.heat.length - 1] || {};
+                const paradas = Object.keys(rampa).sort((a, b) => a - b);
+                if (!paradas.length) return null;
+                const degradado = paradas
+                  .map((k) => `${rampa[k]} ${Math.round(+k * 100)}%`)
+                  .join(", ");
+                return (
+                  <div className="heat-leg" key={g}>
+                    <span className="heat-bar"
+                          style={{ background: `linear-gradient(90deg, ${degradado})` }} />
+                    <span>{dim.grupoEtiqueta[g]}</span>
+                  </div>
+                );
+              })}
+              <div className="heat-esc"><span>menos denso</span><span>más denso</span></div>
+              <p className="lay-nota">
+                La intensidad es <b>relativa a lo que se está viendo</b>: el tono
+                más fuerte marca el percentil 98 de densidad de los registros
+                dibujados, y se recalcula al cambiar el zoom o los filtros. Sirve
+                para comparar zonas dentro de un mismo mapa, no entre mapas.
+              </p>
+            </div>
+          )}
+
           <div className="lgrp" id="legend">
             <h4>Índice de riesgo</h4>
             <div><i style={{ background: P.st[0] }} /> 0–30 &middot; Bajo</div>
@@ -182,21 +234,31 @@ export default function PanelCapas({
           {cobertura && (
             <div className="cob">
               <h4>Cobertura geográfica</h4>
-              <div><b>{n0(cobertura.gps_real)}</b> con GPS real ({pct(cobertura.gps_real)})</div>
               <div>
-                <b>{n0(cobertura.centroide_municipio)}</b> en el centro de su
-                municipio ({pct(cobertura.centroide_municipio)})
+                <b>{n0(cobertura.gps_propio)}</b> con coordenada propia
+                ({pct(cobertura.gps_propio)})
               </div>
+              <div>
+                <b>{n0(cobertura.clave_administrativa)}</b> por municipio
+                ({pct(cobertura.clave_administrativa)})
+              </div>
+              {cobertura.gps_descartado_por_incoherencia > 0 && (
+                <div className="cob-warn">
+                  <b>{n0(cobertura.gps_descartado_por_incoherencia)}</b> con GPS
+                  descartado ({pct(cobertura.gps_descartado_por_incoherencia)})
+                </div>
+              )}
               <div className={cobertura.sin_ubicacion ? "cob-warn" : undefined}>
                 <b>{n0(cobertura.sin_ubicacion)}</b> sin ubicación ({pct(cobertura.sin_ubicacion)})
               </div>
-              {cobertura.sin_ubicacion > 0 && (
-                <p className="lay-nota">
-                  Sin ubicación = sin coordenada y con un municipio que no está en
-                  el área de ElectroHuila (Bogotá, Ibagué, Medellín…). No se
-                  dibujan y no cuentan en ninguna cifra del mapa.
-                </p>
-              )}
+              <p className="lay-nota">
+                El <b>GPS descartado</b> caía en un municipio distinto al que
+                declara la orden —casi siempre sobre la sede— así que esas
+                órdenes bajan al centro de su municipio. <b>Sin ubicación</b> son
+                las que no traen coordenada y cuyo municipio no está en el área
+                de ElectroHuila (Bogotá, Ibagué, Medellín…): no se dibujan y no
+                cuentan en ninguna cifra del mapa.
+              </p>
             </div>
           )}
         </>
