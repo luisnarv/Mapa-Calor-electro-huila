@@ -14,10 +14,6 @@ out/
 *.tsbuildinfo
 next-env.d.ts
 
-# payload generado por el ETL (se regenera con `python etl/run_etl.py`)
-web/public/data.json
-web/public/data_*.json
-
 # worker de maplibre (lo repone el postinstall)
 web/public/maplibre/
 
